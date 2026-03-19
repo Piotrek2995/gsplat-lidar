@@ -716,9 +716,9 @@ class Runner:
             self.trainset,
             batch_size=cfg.batch_size,
             shuffle=True,
-            num_workers=4,
-            persistent_workers=True,
-            pin_memory=True,
+            num_workers=0,
+            persistent_workers=False,
+            pin_memory=False,
         )
         trainloader_iter = iter(trainloader)
 
@@ -1288,6 +1288,14 @@ class Runner:
             "alpha": "RGB",
         }
 
+        # Packed rasterization expects background shape [3], unpacked expects [1, 3].
+        viewer_background = (
+            torch.as_tensor(render_tab_state.backgrounds, device=self.device).float()
+            / 255.0
+        )
+        if not self.cfg.packed:
+            viewer_background = viewer_background.unsqueeze(0)
+
         render_colors, render_alphas, info = self.rasterize_splats(
             camtoworlds=c2w[None],
             Ks=K[None],
@@ -1298,8 +1306,7 @@ class Runner:
             far_plane=render_tab_state.far_plane,
             radius_clip=render_tab_state.radius_clip,
             eps2d=render_tab_state.eps2d,
-            backgrounds=torch.tensor([render_tab_state.backgrounds], device=self.device)
-            / 255.0,
+            backgrounds=viewer_background,
             render_mode=RENDER_MODE_MAP[render_tab_state.render_mode],
             rasterize_mode=render_tab_state.rasterize_mode,
             camera_model=render_tab_state.camera_model,

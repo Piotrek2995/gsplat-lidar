@@ -466,7 +466,7 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
     posW2C_VJP(R, t, glm::make_vec3(means), v_mean_c, v_R, v_t, v_mean);
     covarW2C_VJP(R, covar, v_covar_c, v_R, v_covar);
 
-    // #if __CUDA_ARCH__ >= 700
+#if __CUDA_ARCH__ >= 700
     // write out results with warp-level reduction
     auto warp = cg::tiled_partition<32>(cg::this_thread_block());
     auto warp_group_g = cg::labeled_partition(warp, gid);
@@ -528,6 +528,50 @@ __global__ void projection_ewa_3dgs_fused_bwd_kernel(
             }
         }
     }
+#else
+    // Fallback for CC < 7.0: no labeled_partition, use direct atomicAdd
+    if (v_means != nullptr) {
+        scalar_t *v_means_ptr = v_means + bid * N * 3 + gid * 3;
+#pragma unroll
+        for (uint32_t i = 0; i < 3; i++) {
+            gpuAtomicAdd(v_means_ptr + i, v_mean[i]);
+        }
+    }
+    if (v_covars != nullptr) {
+        scalar_t *v_covars_ptr = v_covars + bid * N * 6 + gid * 6;
+        gpuAtomicAdd(v_covars_ptr, v_covar[0][0]);
+        gpuAtomicAdd(v_covars_ptr + 1, v_covar[0][1] + v_covar[1][0]);
+        gpuAtomicAdd(v_covars_ptr + 2, v_covar[0][2] + v_covar[2][0]);
+        gpuAtomicAdd(v_covars_ptr + 3, v_covar[1][1]);
+        gpuAtomicAdd(v_covars_ptr + 4, v_covar[1][2] + v_covar[2][1]);
+        gpuAtomicAdd(v_covars_ptr + 5, v_covar[2][2]);
+    } else {
+        mat3 rotmat = quat_to_rotmat(quat);
+        vec4 v_quat(0.f);
+        vec3 v_scale(0.f);
+        quat_scale_to_covar_vjp(quat, scale, rotmat, v_covar, v_quat, v_scale);
+        scalar_t *v_quats_ptr = v_quats + bid * N * 4 + gid * 4;
+        scalar_t *v_scales_ptr = v_scales + bid * N * 3 + gid * 3;
+        gpuAtomicAdd(v_quats_ptr, v_quat[0]);
+        gpuAtomicAdd(v_quats_ptr + 1, v_quat[1]);
+        gpuAtomicAdd(v_quats_ptr + 2, v_quat[2]);
+        gpuAtomicAdd(v_quats_ptr + 3, v_quat[3]);
+        gpuAtomicAdd(v_scales_ptr, v_scale[0]);
+        gpuAtomicAdd(v_scales_ptr + 1, v_scale[1]);
+        gpuAtomicAdd(v_scales_ptr + 2, v_scale[2]);
+    }
+    if (v_viewmats != nullptr) {
+        scalar_t *v_viewmats_ptr = v_viewmats + bid * C * 16 + cid * 16;
+#pragma unroll
+        for (uint32_t i = 0; i < 3; i++) {
+#pragma unroll
+            for (uint32_t j = 0; j < 3; j++) {
+                gpuAtomicAdd(v_viewmats_ptr + i * 4 + j, v_R[j][i]);
+            }
+            gpuAtomicAdd(v_viewmats_ptr + i * 4 + 3, v_t[i]);
+        }
+    }
+#endif
 }
 
 void launch_projection_ewa_3dgs_fused_bwd_kernel(

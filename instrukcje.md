@@ -119,6 +119,17 @@ Sprobuj:
 Dla wyzszych factorow pipeline moze oczekiwac folderu pochodnego.
 Najprostsze wyjscie: ustaw `--data_factor 1` albo przygotuj odpowiedni cache/downscale.
 
+### `Exception: Input quaternion should be a 3- or 4-vector` (COLMAP txt na Python 3.12)
+Problem: parser `pycolmap` na Pythonie 3.12 nie moze czytac COLMAP `.txt` (bug z `map()` objektami).
+
+Rozwiazanie: konwertuj COLMAP model z `.txt` na `.bin`:
+
+```bash
+colmap model_converter --input_path <dataset>/sparse/0 --output_path <dataset>/sparse/0 --output_type BIN
+```
+
+Po konwersji parser wykorzysta `.bin` pliki, ktore dzialaja bez bledow.
+
 ---
 
 ## 6) Przydatne komendy diagnostyczne

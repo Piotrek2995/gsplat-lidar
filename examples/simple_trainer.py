@@ -15,17 +15,18 @@ import tqdm
 import tyro
 import viser
 import yaml
-from gsplat.color_correct import color_correct_affine, color_correct_quadratic
 from datasets.colmap import Dataset, Parser
 from datasets.traj import (
     generate_ellipse_path_z,
     generate_interpolated_path,
     generate_spiral_path,
 )
-from fused_ssim import fused_ssim
 from torch import Tensor
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
+from torchmetrics.functional.image import (
+    structural_similarity_index_measure as tm_structural_similarity_index_measure,
+)
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 from typing_extensions import Literal, assert_never
@@ -39,6 +40,30 @@ from gsplat.rendering import rasterization
 from gsplat.strategy import DefaultStrategy, MCMCStrategy
 from gsplat_viewer import GsplatViewer, GsplatRenderTabState
 from nerfview import CameraState, RenderTabState, apply_float_colormap
+
+try:
+    from gsplat.color_correct import color_correct_affine, color_correct_quadratic
+except ImportError:
+    print("[WARN] gsplat.color_correct is unavailable. Disabling color correction.")
+
+    def color_correct_affine(colors: Tensor, pixels: Tensor) -> Tensor:
+        return colors
+
+    def color_correct_quadratic(colors: Tensor, pixels: Tensor) -> Tensor:
+        return colors
+
+try:
+    from fused_ssim import fused_ssim as _fused_ssim
+
+    def compute_ssim(pred: Tensor, target: Tensor) -> Tensor:
+        return _fused_ssim(pred, target, padding="valid")
+
+
+except ImportError:
+    print("[WARN] fused_ssim is not available. Falling back to torchmetrics SSIM.")
+
+    def compute_ssim(pred: Tensor, target: Tensor) -> Tensor:
+        return tm_structural_similarity_index_measure(pred, target, data_range=1.0)
 
 
 @dataclass
@@ -808,8 +833,8 @@ class Runner:
 
             # loss
             l1loss = F.l1_loss(colors, pixels)
-            ssimloss = 1.0 - fused_ssim(
-                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2), padding="valid"
+            ssimloss = 1.0 - compute_ssim(
+                colors.permute(0, 3, 1, 2), pixels.permute(0, 3, 1, 2)
             )
             loss = l1loss * (1.0 - cfg.ssim_lambda) + ssimloss * cfg.ssim_lambda
             if cfg.depth_loss:

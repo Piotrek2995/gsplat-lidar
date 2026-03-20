@@ -2,9 +2,21 @@
 
 ## Szybki start
 
+Jednorazowy setup na Linux + NVIDIA GPU:
+
 ```bash
-cd ~/gsplat/examples
-source ~/gsplat/gsplat_env/bin/activate
+cd ~/gsplat-lidar
+bash setup_linux_cuda.sh
+```
+
+Uwagi dla tej maszyny (brak `nvcc`):
+- setup instaluje prebuilt `gsplat` wheel (`pt21cu121`) zamiast kompilacji lokalnej,
+- `fused-ssim`, `fused-bilagrid` i `ppisp` sa pomijane,
+- trening dziala z fallbackiem SSIM (torchmetrics), ale moze byc wolniejszy.
+
+```bash
+cd ~/gsplat-lidar/examples
+source ~/gsplat-lidar/.venv/bin/activate
 ```
 
 Sprawdz GPU i torch:
@@ -20,8 +32,8 @@ python -c "import torch; print('cuda:', torch.cuda.is_available(), 'count:', tor
 Przyklad jak w `moja_scena`:
 
 ```bash
-cd ~/gsplat/examples
-source ~/gsplat/gsplat_env/bin/activate
+cd ~/gsplat-lidar/examples
+source ~/gsplat-lidar/.venv/bin/activate
 
 python simple_trainer.py default \
   --data_dir /sciezka/do/moja_scena \
@@ -41,12 +53,12 @@ Pliki wynikowe:
 ## 2) Uczenie dla atlas (wieksze zdjecia, mniej OOM)
 
 ```bash
-cd ~/gsplat/examples
-source ~/gsplat/gsplat_env/bin/activate
+cd ~/gsplat-lidar/examples
+source ~/gsplat-lidar/.venv/bin/activate
 
 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 python simple_trainer.py default \
-  --data_dir ~/gsplat/examples/data/atlas/drive-download-20260318T082918Z-1-001 \
+  --data_dir ~/gsplat-lidar/examples/data/atlas/drive-download-20260318T082918Z-1-001 \
   --data_factor 4 \
   --packed \
   --max_steps 30000 \
@@ -66,8 +78,8 @@ Uwagi:
 Do ogladania checkpointa uzywaj `simple_viewer.py`:
 
 ```bash
-cd ~/gsplat/examples
-source ~/gsplat/gsplat_env/bin/activate
+cd ~/gsplat-lidar/examples
+source ~/gsplat-lidar/.venv/bin/activate
 
 python simple_viewer.py --ckpt results/moja_scena/ckpts/ckpt_29999_rank0.pt
 ```
@@ -105,7 +117,7 @@ Uruchamiasz z niewlasciwego katalogu.
 Poprawnie:
 
 ```bash
-cd ~/gsplat/examples
+cd ~/gsplat-lidar/examples
 python simple_trainer.py ...
 ```
 
@@ -137,14 +149,14 @@ Po konwersji parser wykorzysta `.bin` pliki, ktore dzialaja bez bledow.
 Status gita:
 
 ```bash
-cd ~/gsplat
+cd ~/gsplat-lidar
 git status --short --branch
 ```
 
 Sprawdzenie checkpointow:
 
 ```bash
-ls -lah ~/gsplat/examples/results/moja_scena/ckpts
+ls -lah ~/gsplat-lidar/examples/results/moja_scena/ckpts
 ```
 
 Szybkie szukanie bledow w logach (jesli logujesz do pliku):
@@ -165,7 +177,7 @@ Aktualny model pracy:
 Push zmian:
 
 ```bash
-cd ~/gsplat
+cd ~/gsplat-lidar
 git push -u origin atlas-lidar-fixes
 ```
 

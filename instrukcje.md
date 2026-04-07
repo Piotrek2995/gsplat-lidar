@@ -170,3 +170,119 @@ git push -u origin atlas-lidar-fixes
 ```
 
 Potem otworz PR z forka do upstream.
+
+---
+
+## 8) Fuzja LiDAR + GSPLAT (przygotowanie do ICP)
+
+Cel tej sekcji:
+- COLMAP wykorzystujemy do poz i orientacji kamer.
+- Chmure punktow do dalszej inicjalizacji chcemy docelowo z LiDAR.
+- ICP robisz recznie w CloudCompare.
+
+### Krok 1: Konwersja obrazow atlas z RGBA do RGB
+
+Powod: przy RGBA COLMAP moze rzucac `BITMAP_ERROR`.
+
+```bash
+cd ~/gsplat/examples
+source ~/gsplat/gsplat_env/bin/activate
+
+python - <<'PY'
+from pathlib import Path
+from PIL import Image
+
+src = Path('data/atlas/images')
+dst = Path('data/atlas/images_rgb')
+dst.mkdir(parents=True, exist_ok=True)
+
+count = 0
+for p in sorted(src.glob('*.png')):
+    with Image.open(p) as im:
+        im.convert('RGB').save(dst / p.name)
+    count += 1
+
+print('converted', count)
+PY
+```
+
+### Krok 2: Pelna rekonstrukcja COLMAP na `images_rgb`
+
+Ta komenda buduje:
+- baze cech i dopasowan,
+- model sparse w `sparse/0`,
+- eksport TXT,
+- chmure `atlas_sparse_points.ply` do ICP.
+
+```bash
+cd ~/gsplat/examples/data/atlas
+rm -rf database.db sparse
+mkdir -p sparse
+
+colmap feature_extractor \
+  --database_path database.db \
+  --image_path images_rgb
+
+colmap exhaustive_matcher \
+  --database_path database.db
+
+colmap mapper \
+  --database_path database.db \
+  --image_path images_rgb \
+  --output_path sparse
+
+colmap model_converter \
+  --input_path sparse/0 \
+  --output_path sparse/0 \
+  --output_type TXT
+
+colmap model_converter \
+  --input_path sparse/0 \
+  --output_path sparse/atlas_sparse_points.ply \
+  --output_type PLY
+```
+
+Kontrola wyniku:
+
+```bash
+ls -lh sparse/atlas_sparse_points.ply
+colmap model_analyzer --path sparse/0
+```
+
+### Krok 3: Wyrownanie ICP (CloudCompare) - recznie
+
+1. Otworz w CloudCompare:
+- `sparse/atlas_sparse_points.ply` (z COLMAP)
+- chmure LiDAR (docelowa referencja)
+2. Zrob wstepne ustawienie (jesli trzeba), potem ICP.
+3. Zapisz:
+- transformacje COLMAP->LiDAR (macierz 4x4),
+- wyrownana chmure LiDAR (lub wyrownana chmure COLMAP - zaleznie od wybranego kierunku).
+
+Po tym kroku mozemy przejsc do podmiany inicjalizacji punktow w treningu GSPLAT na chmure LiDAR.
+
+### Krok 4: Start treningu z geometrii LiDAR
+
+Uzyj dedykowanego pliku trenera z obsluga LiDAR:
+
+```bash
+cd ~/gsplat/examples
+source ~/gsplat/gsplat_env/bin/activate
+
+python simple_trainer_z_lidar.py default \
+  --data_dir ~/gsplat/examples/data/atlas \
+  --no-normalize-world-space \
+  --lidar_ply lidar/atlas_wyciete_NAJLEPSZE_SKALA.ply \
+  --lidar_max_points 300000 \
+  --data_factor 4 \
+  --packed \
+  --max_steps 30000 \
+  --save_steps 7000 30000 \
+  --eval_steps 1000000 \
+  --result_dir results/atlas_lidar_init
+```
+
+Uwagi:
+- `--lidar_ply` moze byc sciezka wzgledna wzgledem `--data_dir` albo absolutna.
+- Jesli chmura jest bardzo duza, zwiekszaj/zmniejszaj `--lidar_max_points` pod VRAM.
+- `--no-normalize-world-space` zostawia skale metryczna, jesli taka byla zachowana po ICP.

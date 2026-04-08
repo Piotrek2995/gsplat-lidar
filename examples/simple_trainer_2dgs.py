@@ -14,7 +14,11 @@ import torch.nn.functional as F
 import tqdm
 import tyro
 import viser
-from datasets.colmap import Dataset, Parser
+try:
+    from datasets.colmap import Dataset, Parser
+except ImportError:
+    Dataset = None
+    Parser = None
 from datasets.traj import generate_interpolated_path
 from torch import Tensor
 from torch.utils.tensorboard import SummaryWriter
@@ -56,6 +60,8 @@ class Config:
     global_scale: float = 1.0
     # Normalize the world space
     normalize_world_space: bool = True
+    # Device selection. CPU mode is not supported in this trainer.
+    device: Literal["auto", "cuda", "cpu"] = "auto"
 
     # Port for the viewer server
     port: int = 8080
@@ -257,7 +263,34 @@ class Runner:
         set_random_seed(42)
 
         self.cfg = cfg
+
+        if cfg.device == "auto":
+            use_cuda = torch.cuda.is_available()
+        elif cfg.device == "cuda":
+            use_cuda = True
+        elif cfg.device == "cpu":
+            use_cuda = False
+        else:
+            raise ValueError(f"Unsupported device mode: {cfg.device}")
+
+        if use_cuda and not torch.cuda.is_available():
+            raise RuntimeError(
+                "Requested CUDA device, but CUDA is not available in this PyTorch build."
+            )
+
+        if not use_cuda:
+            raise RuntimeError(
+                "`examples/simple_trainer_2dgs.py` currently requires CUDA rasterization. "
+                "CPU training in this repo is available via `examples/image_fitting.py`."
+            )
+
         self.device = "cuda"
+
+        if Dataset is None or Parser is None:
+            raise ImportError(
+                "Missing dataset dependencies (e.g. pycolmap). "
+                "Install examples dependencies before running simple_trainer_2dgs."
+            )
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)

@@ -20,8 +20,13 @@ class SimpleTrainer:
         self,
         gt_image: Tensor,
         num_points: int = 2000,
+        device: Literal["auto", "cpu", "cuda"] = "auto",
     ):
-        self.device = torch.device("cuda:0")
+        if device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        if device == "cuda" and not torch.cuda.is_available():
+            raise RuntimeError("Requested CUDA device but CUDA is not available.")
+        self.device = torch.device("cuda:0" if device == "cuda" else "cpu")
         self.gt_image = gt_image.to(device=self.device)
         self.num_points = num_points
 
@@ -31,6 +36,56 @@ class SimpleTrainer:
         self.img_size = torch.tensor([self.W, self.H, 1], device=self.device)
 
         self._init_gaussians()
+        self._pixel_grid = None
+
+    def _sync_if_cuda(self):
+        if self.device.type == "cuda":
+            torch.cuda.synchronize()
+
+    def _cpu_render(self, K: Tensor) -> Tensor:
+        """Simple differentiable Gaussian fallback for CPU-only demo runs."""
+        means_c = (
+            torch.einsum("ij,nj->ni", self.viewmat[:3, :3], self.means)
+            + self.viewmat[:3, 3][None, :]
+        )
+        z = means_c[:, 2].clamp(min=1e-3)
+        u = K[0, 0] * means_c[:, 0] / z + K[0, 2]
+        v = K[1, 1] * means_c[:, 1] / z + K[1, 2]
+
+        sxy = self.scales[:, :2].mean(dim=-1).clamp(min=1e-3)
+        sigma = (sxy * K[0, 0] / z).clamp(min=0.7, max=12.0)
+
+        if self._pixel_grid is None:
+            ys = torch.arange(self.H, device=self.device, dtype=self.means.dtype)
+            xs = torch.arange(self.W, device=self.device, dtype=self.means.dtype)
+            gy, gx = torch.meshgrid(ys, xs, indexing="ij")
+            self._pixel_grid = torch.stack([gx, gy], dim=-1)
+
+        grid = self._pixel_grid
+        colors = torch.sigmoid(self.rgbs)
+        opacities = torch.sigmoid(self.opacities)
+
+        num = torch.zeros((self.H, self.W, colors.shape[-1]), device=self.device)
+        den = torch.zeros((self.H, self.W, 1), device=self.device)
+
+        chunk = 256
+        for i in range(0, self.num_points, chunk):
+            uu = u[i : i + chunk][:, None, None]
+            vv = v[i : i + chunk][:, None, None]
+            ss = sigma[i : i + chunk][:, None, None].clamp(min=1e-3)
+            cc = colors[i : i + chunk]
+            aa = opacities[i : i + chunk][:, None, None, None]
+
+            dx = grid[None, :, :, 0] - uu
+            dy = grid[None, :, :, 1] - vv
+            dist2 = dx * dx + dy * dy
+            w = aa * torch.exp(-0.5 * dist2 / (ss * ss))[..., None]
+            num = num + (w * cc[:, None, None, :]).sum(dim=0)
+            den = den + w.sum(dim=0)
+
+        out = num / den.clamp(min=1e-6)
+        bg = torch.sigmoid(self.background)[None, None, :]
+        return out * torch.clamp(den, 0.0, 1.0) + bg * (1.0 - torch.clamp(den, 0.0, 1.0))
 
     def _init_gaussians(self):
         """Random gaussians"""
@@ -100,30 +155,36 @@ class SimpleTrainer:
             rasterize_fnc = rasterization
         elif model_type == "2dgs":
             rasterize_fnc = rasterization_2dgs
+        else:
+            raise ValueError(f"Unsupported model_type: {model_type}")
 
         for iter in range(iterations):
             start = time.time()
 
-            renders = rasterize_fnc(
-                self.means,
-                self.quats / self.quats.norm(dim=-1, keepdim=True),
-                self.scales,
-                torch.sigmoid(self.opacities),
-                torch.sigmoid(self.rgbs),
-                self.viewmat[None],
-                K[None],
-                self.W,
-                self.H,
-                packed=False,
-            )[0]
-            out_img = renders[0]
-            torch.cuda.synchronize()
+            if self.device.type == "cuda":
+                renders = rasterize_fnc(
+                    self.means,
+                    self.quats / self.quats.norm(dim=-1, keepdim=True),
+                    self.scales,
+                    torch.sigmoid(self.opacities),
+                    torch.sigmoid(self.rgbs),
+                    self.viewmat[None],
+                    K[None],
+                    self.W,
+                    self.H,
+                    packed=False,
+                )[0]
+                out_img = renders[0]
+            else:
+                out_img = self._cpu_render(K)
+
+            self._sync_if_cuda()
             times[0] += time.time() - start
             loss = mse_loss(out_img, self.gt_image)
             optimizer.zero_grad()
             start = time.time()
             loss.backward()
-            torch.cuda.synchronize()
+            self._sync_if_cuda()
             times[1] += time.time() - start
             optimizer.step()
             print(f"Iteration {iter + 1}/{iterations}, Loss: {loss.item()}")
@@ -167,6 +228,7 @@ def main(
     iterations: int = 1000,
     lr: float = 0.01,
     model_type: Literal["3dgs", "2dgs"] = "3dgs",
+    device: Literal["auto", "cpu", "cuda"] = "auto",
 ) -> None:
     if img_path:
         gt_image = image_path_to_tensor(img_path)
@@ -176,7 +238,7 @@ def main(
         gt_image[: height // 2, : width // 2, :] = torch.tensor([1.0, 0.0, 0.0])
         gt_image[height // 2 :, width // 2 :, :] = torch.tensor([0.0, 0.0, 1.0])
 
-    trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points)
+    trainer = SimpleTrainer(gt_image=gt_image, num_points=num_points, device=device)
     trainer.train(
         iterations=iterations,
         lr=lr,

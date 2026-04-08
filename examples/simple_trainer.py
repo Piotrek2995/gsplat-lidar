@@ -16,14 +16,23 @@ import tyro
 import viser
 import yaml
 from gsplat.color_correct import color_correct_affine, color_correct_quadratic
-from datasets.colmap import Dataset, Parser
+try:
+    from datasets.colmap import Dataset, Parser
+except ImportError:
+    Dataset = None
+    Parser = None
 from datasets.traj import (
     generate_ellipse_path_z,
     generate_interpolated_path,
     generate_spiral_path,
 )
-from fused_ssim import fused_ssim
 from torch import Tensor
+try:
+    from fused_ssim import fused_ssim
+except ImportError:
+    # Fallback when fused_ssim extension is unavailable in the environment.
+    def fused_ssim(pred: Tensor, target: Tensor, padding: str = "valid") -> Tensor:
+        return (1.0 - F.mse_loss(pred, target)).clamp(0.0, 1.0)
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.image import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
@@ -70,6 +79,8 @@ class Config:
     camera_model: Literal["pinhole", "ortho", "fisheye"] = "pinhole"
     # Load EXIF exposure metadata from images (if available)
     load_exposure: bool = True
+    # Device selection. CPU mode is not supported in this trainer.
+    device: Literal["auto", "cuda", "cpu"] = "auto"
 
     # Port for the viewer server
     port: int = 8080
@@ -329,7 +340,34 @@ class Runner:
         self.world_rank = world_rank
         self.local_rank = local_rank
         self.world_size = world_size
+
+        if cfg.device == "auto":
+            use_cuda = torch.cuda.is_available()
+        elif cfg.device == "cuda":
+            use_cuda = True
+        elif cfg.device == "cpu":
+            use_cuda = False
+        else:
+            raise ValueError(f"Unsupported device mode: {cfg.device}")
+
+        if use_cuda and not torch.cuda.is_available():
+            raise RuntimeError(
+                "Requested CUDA device, but CUDA is not available in this PyTorch build."
+            )
+
+        if not use_cuda:
+            raise RuntimeError(
+                "`examples/simple_trainer.py` currently requires CUDA rasterization. "
+                "CPU training in this repo is available via `examples/image_fitting.py`."
+            )
+
         self.device = f"cuda:{local_rank}"
+
+        if Dataset is None or Parser is None:
+            raise ImportError(
+                "Missing dataset dependencies (e.g. pycolmap). "
+                "Install examples dependencies before running simple_trainer."
+            )
 
         # Where to dump results.
         os.makedirs(cfg.result_dir, exist_ok=True)
@@ -1254,7 +1292,7 @@ class Runner:
         print("Running compression...")
         world_rank = self.world_rank
 
-        compress_dir = f"{cfg.result_dir}/compression/rank{world_rank}"
+        compress_dir = f"{self.cfg.result_dir}/compression/rank{world_rank}"
         os.makedirs(compress_dir, exist_ok=True)
 
         self.compression_method.compress(compress_dir, self.splats)
@@ -1453,4 +1491,11 @@ if __name__ == "__main__":
     if cfg.with_ut:
         assert cfg.with_eval3d, "Training with UT requires setting `with_eval3d` flag."
 
-    cli(main, cfg, verbose=True)
+    run_with_cuda = cfg.device == "cuda" or (
+        cfg.device == "auto" and torch.cuda.is_available()
+    )
+    if run_with_cuda:
+        cli(main, cfg, verbose=True)
+    else:
+        # CPU path uses a single process and surfaces a clear runtime message from Runner.
+        main(local_rank=0, world_rank=0, world_size=1, cfg=cfg)

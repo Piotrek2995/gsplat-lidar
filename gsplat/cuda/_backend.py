@@ -131,7 +131,8 @@ def cuda_toolkit_available():
         return False
 
     # If we have a cuda_home, check if nvcc exists there:
-    nvcc_path = os.path.join(cuda_home, "bin", "nvcc")
+    nvcc_name = "nvcc.exe" if os.name == "nt" else "nvcc"
+    nvcc_path = os.path.join(cuda_home, "bin", nvcc_name)
     if not os.path.isfile(nvcc_path):
         # Maybe still on PATH, try calling "nvcc" directly:
         try:
@@ -173,9 +174,13 @@ except ImportError:
         glm_path = os.path.join(current_dir, "csrc", "third_party", "glm")
 
         extra_include_paths = [os.path.join(PATH, "include/"), glm_path]
-        opt_level = "-O0" if FAST_COMPILE else "-O3"
-        extra_cflags = [opt_level, "-Wno-attributes"]
-        extra_cuda_cflags = [opt_level]
+        if os.name == "nt":
+            opt_level = "/Od" if FAST_COMPILE else "/O2"
+            extra_cflags = [opt_level]
+        else:
+            opt_level = "-O0" if FAST_COMPILE else "-O3"
+            extra_cflags = [opt_level, "-Wno-attributes"]
+        extra_cuda_cflags = ["-O0" if FAST_COMPILE else "-O3"]
         if not NO_FAST_MATH:
             extra_cuda_cflags += ["-use_fast_math"]
         sources = (
@@ -193,6 +198,8 @@ except ImportError:
 
         if os.path.exists(os.path.join(build_dir, f"{name}.so")) or os.path.exists(
             os.path.join(build_dir, f"{name}.lib")
+        ) or os.path.exists(
+            os.path.join(build_dir, f"{name}.pyd")
         ):
             # If the build exists, we assume the extension has been built
             # and we can load it.

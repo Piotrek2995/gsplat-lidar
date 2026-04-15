@@ -163,6 +163,26 @@ PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
   --result_dir /home/piotr-pawlus/gsplat/examples/results/atlas_lidar_init_df4
 ```
 
+Na **Windows (PowerShell)** ta sama komenda wyglada tak:
+
+```powershell
+cd C:\sciezka\do\gsplat-lidar\examples
+.\venv\Scripts\activate
+$env:PYTORCH_CUDA_ALLOC_CONF = "expandable_segments:True"
+
+python simple_trainer_z_lidar.py default `
+  --data_dir C:\sciezka\do\gsplat-lidar\examples\data\atlas `
+  --no-normalize-world-space `
+  --lidar_ply lidar\atlas_wyciete_NAJLEPSZE_SKALA.ply `
+  --lidar_max_points 300000 `
+  --data_factor 4 `
+  --packed `
+  --max_steps 30000 `
+  --save_steps 7000 30000 `
+  --eval_steps 1000000 `
+  --result_dir results\atlas_lidar_init_df4
+```
+
 ## 8) Efekt koncowy architektury
 
 Architektura po zmianie:

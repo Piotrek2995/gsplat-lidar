@@ -284,8 +284,10 @@ def _distributed_worker(
     distributed = world_size > 1
     if distributed:
         torch.cuda.set_device(local_rank)
+        # NCCL is not available on Windows; fall back to gloo.
+        backend = "gloo" if os.name == "nt" else "nccl"
         torch.distributed.init_process_group(
-            backend="nccl", world_size=world_size, rank=world_rank
+            backend=backend, world_size=world_size, rank=world_rank
         )
         # Dump collection that participates all ranks.
         # This initializes the communicator required by `batch_isend_irecv`.

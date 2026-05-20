@@ -119,6 +119,25 @@ def main(local_rank: int, world_rank, world_size: int, args):
         sh_degree = int(math.sqrt(colors.shape[-2]) - 1)
         print("Number of Gaussians:", len(means))
 
+        # Auto-fit large metric scenes to viewer-friendly coordinates.
+        # This only affects visualization and does not modify checkpoints.
+        if args.auto_fit_viewer:
+            center = means.mean(dim=0, keepdim=True)
+            centered = means - center
+            radii = torch.linalg.norm(centered, dim=-1)
+            # Robust radius estimate to avoid outlier-driven scaling.
+            radius_95 = torch.quantile(radii, 0.95).item()
+            target_radius = 3.0
+            view_scale = max(radius_95 / target_radius, 1e-6)
+            means = centered / view_scale
+            scales = scales / view_scale
+            print(
+                "Viewer auto-fit:",
+                f"center={center.squeeze(0).tolist()}",
+                f"radius95={radius_95:.3f}",
+                f"scale={view_scale:.3f}",
+            )
+
     # register and open viewer
     @torch.no_grad()
     def viewer_render_fn(camera_state: CameraState, render_tab_state: RenderTabState):
@@ -242,6 +261,12 @@ if __name__ == "__main__":
         "--with_ut", action="store_true", help="use uncentered transform"
     )
     parser.add_argument("--with_eval3d", action="store_true", help="use eval 3D")
+    parser.add_argument(
+        "--auto-fit-viewer",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="auto-center and scale checkpoint scenes for easier viewer navigation",
+    )
     args = parser.parse_args()
     assert args.scene_grid % 2 == 1, "scene_grid must be odd"
 
